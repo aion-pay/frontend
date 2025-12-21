@@ -1,8 +1,10 @@
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import { useState } from "react";
 
 const Navbar = () => {
   const navigate = useNavigate();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   return (
     <motion.nav
       initial={{ opacity: 0, y: -20 }}
@@ -44,7 +46,8 @@ const Navbar = () => {
             </a>
           </motion.div>
 
-          <div className="flex items-center gap-4">
+          {/* Desktop Navigation */}
+          <div className="hidden md:flex items-center gap-4">
             <motion.button
               onClick={() => navigate("/borrow")}
               whileHover={{ scale: 1.05 }}
@@ -98,8 +101,101 @@ const Navbar = () => {
               </motion.a>
             </div>
           </div>
+
+          {/* Mobile Menu Button */}
+          <motion.button
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            whileTap={{ scale: 0.95 }}
+            className="md:hidden flex flex-col justify-center items-center w-8 h-8 space-y-1"
+            aria-label="Toggle mobile menu"
+          >
+            <motion.span
+              animate={{ rotate: isMenuOpen ? 45 : 0, y: isMenuOpen ? 6 : 0 }}
+              className="w-6 h-0.5 bg-gray-800 block transition-all"
+            />
+            <motion.span
+              animate={{ opacity: isMenuOpen ? 0 : 1 }}
+              className="w-6 h-0.5 bg-gray-800 block transition-all"
+            />
+            <motion.span
+              animate={{ rotate: isMenuOpen ? -45 : 0, y: isMenuOpen ? -6 : 0 }}
+              className="w-6 h-0.5 bg-gray-800 block transition-all"
+            />
+          </motion.button>
         </div>
       </div>
+
+      {/* Mobile Menu */}
+      <motion.div
+        initial={{ height: 0, opacity: 0 }}
+        animate={{
+          height: isMenuOpen ? "auto" : 0,
+          opacity: isMenuOpen ? 1 : 0
+        }}
+        transition={{ duration: 0.3, ease: "easeInOut" }}
+        className="md:hidden overflow-hidden bg-white/95 backdrop-blur-xl border-t border-gray-200"
+      >
+        <div className="px-4 py-6 space-y-4">
+          <motion.button
+            onClick={() => {
+              navigate("/borrow");
+              setIsMenuOpen(false);
+            }}
+            whileTap={{ scale: 0.95 }}
+            className="w-full text-left px-4 py-3 text-gray-600 hover:text-black hover:bg-gray-50 rounded-lg transition-all duration-300 font-medium"
+          >
+            Borrow
+          </motion.button>
+
+          <motion.button
+            onClick={() => {
+              navigate("/lend/deposit");
+              setIsMenuOpen(false);
+            }}
+            whileTap={{ scale: 0.95 }}
+            className="w-full text-left px-4 py-3 text-gray-600 hover:text-black hover:bg-gray-50 rounded-lg transition-all duration-300 font-medium"
+          >
+            Lend
+          </motion.button>
+
+          <motion.button
+            onClick={() => {
+              navigate("/waitlist");
+              setIsMenuOpen(false);
+            }}
+            whileTap={{ scale: 0.95 }}
+            className="w-full px-4 py-3 bg-gradient-to-r from-black to-gray-800 text-white rounded-lg font-medium hover:shadow-lg hover:shadow-black/40 transition-all duration-300"
+          >
+            Waitlist
+          </motion.button>
+
+          {/* Mobile Social Media Icons */}
+          <div className="flex justify-center gap-4 pt-4 border-t border-gray-200">
+            <motion.a
+              href="https://x.com/aion_org"
+              target="_blank"
+              rel="noopener noreferrer"
+              whileTap={{ scale: 0.9 }}
+              className="w-10 h-10 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center text-gray-600 hover:text-black transition-all duration-300"
+              aria-label="Follow Aion on Twitter"
+              title="Follow us on X (Twitter)"
+            >
+              <span className="text-sm font-bold">𝕏</span>
+            </motion.a>
+            <motion.a
+              href="https://www.instagram.com/aion_org/"
+              target="_blank"
+              rel="noopener noreferrer"
+              whileTap={{ scale: 0.9 }}
+              className="w-10 h-10 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center text-gray-600 hover:text-black transition-all duration-300"
+              aria-label="Follow Aion on Instagram"
+              title="Follow us on Instagram"
+            >
+              <span className="text-sm font-bold">IG</span>
+            </motion.a>
+          </div>
+        </div>
+      </motion.div>
     </motion.nav>
   );
 };
