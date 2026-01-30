@@ -8,11 +8,11 @@ import { GlowingButton } from "../../components/GlowingButton";
 import LoginWithGoogleButton from "../../components/LoginWithGoogleButton";
 import { WalletSelector } from "../../components/WalletSelector";
 import {
-  aptos,
+  ADMIN_ADDRESS,
   CONTRACT_ADDRESS,
   fetchUsdcBalance,
+  getCreditLineInfo as getCreditLineInfoFromLib,
   handleTransactionError,
-  unitsToUsdc,
   usdcToUnits,
   validateUsdcAmount,
 } from "../../lib/contractUtils";
@@ -24,6 +24,7 @@ type CreditLineInfo = {
   isActive: boolean;
   lastBorrowTimestamp: number;
   collateralAmount?: number;
+  collateral?: number;
 };
 
 export default function StakeCollateral() {
@@ -57,27 +58,21 @@ export default function StakeCollateral() {
     try {
       console.log(`Fetching credit line info for ${account.address.toString()}`);
 
-      // Use the view function from Integration Guide
-      const [collateralDeposited, creditLimit, _borrowedAmount, _interestAccrued, totalDebt, repaymentDueDate, isActive] =
-        await aptos.view<[string, string, string, string, string, string, boolean]>({
-          payload: {
-            function: `${CONTRACT_ADDRESS}::credit_manager::get_credit_info`,
-            functionArguments: [CONTRACT_ADDRESS, account.address.toString()],
-          },
-        });
+      // Use the updated getCreditLineInfo function
+      const creditInfo = await getCreditLineInfoFromLib(account.address.toString());
 
-      const creditLimitUsdc = unitsToUsdc(creditLimit);
-      const currentDebtUsdc = unitsToUsdc(totalDebt);
-      const availableCredit = creditLimitUsdc - currentDebtUsdc;
+      if (creditInfo) {
+        return {
+          creditLimit: creditInfo.creditLimit,
+          currentDebt: creditInfo.currentDebt,
+          availableCredit: creditInfo.availableCredit,
+          isActive: creditInfo.isActive,
+          lastBorrowTimestamp: creditInfo.lastBorrowTimestamp,
+          collateralAmount: creditInfo.collateral,
+        };
+      }
 
-      return {
-        creditLimit: creditLimitUsdc,
-        currentDebt: currentDebtUsdc,
-        availableCredit: Math.max(0, availableCredit),
-        isActive,
-        lastBorrowTimestamp: parseInt(repaymentDueDate),
-        collateralAmount: unitsToUsdc(collateralDeposited),
-      };
+      return null;
     } catch (error: any) {
       console.error("Error fetching credit line info:", error);
       return null;
@@ -94,7 +89,7 @@ export default function StakeCollateral() {
     const payload: InputTransactionData = {
       data: {
         function: `${CONTRACT_ADDRESS}::credit_manager::open_credit_line`,
-        functionArguments: [CONTRACT_ADDRESS, usdcToUnits(creditLimitUsdc)],
+        functionArguments: [ADMIN_ADDRESS, usdcToUnits(creditLimitUsdc)],
       },
     };
 
@@ -112,7 +107,7 @@ export default function StakeCollateral() {
     const payload: InputTransactionData = {
       data: {
         function: `${CONTRACT_ADDRESS}::credit_manager::add_collateral`,
-        functionArguments: [CONTRACT_ADDRESS, usdcToUnits(collateralAmountUsdc)],
+        functionArguments: [ADMIN_ADDRESS, usdcToUnits(collateralAmountUsdc)],
       },
     };
 

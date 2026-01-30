@@ -1,9 +1,12 @@
 import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk";
 
-export const CONTRACT_ADDRESS = "0x1355c80d440ac62e6837469c1ae59ab5b3493a7ff394d3a3da7eb43090e39007";
-export const USDC_METADATA = "0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832";
+export const CONTRACT_ADDRESS =
+  import.meta.env.VITE_CONTRACT_ADDRESS || "0x636df8ee3f59dfe7d17ff23d3d072b13c38db48740ac18c27f558e6e26165172";
+export const ADMIN_ADDRESS =
+  import.meta.env.VITE_ADMIN_ADDRESS || "0xceb67803c3af67e2031e319f021e693ead697dda75e59a7b85a7e75a1cda4d78";
+export const USDC_METADATA = "0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b";
 
-const config = new AptosConfig({ network: Network.TESTNET });
+const config = new AptosConfig({ network: Network.MAINNET });
 export const aptos = new Aptos(config);
 
 export const usdcToUnits = (usdcAmount: number): string => {
@@ -18,7 +21,6 @@ export const unitsToUsdc = (units: string | number): number => {
 
 export const fetchUsdcBalance = async (accountAddress: string): Promise<number> => {
   try {
-    console.log(`Fetching USDC balance for ${accountAddress} using metadata ${USDC_METADATA}`);
     const [balanceStr] = await aptos.view<[string]>({
       payload: {
         function: "0x1::primary_fungible_store::balance",
@@ -27,60 +29,34 @@ export const fetchUsdcBalance = async (accountAddress: string): Promise<number> 
       },
     });
     const balance = parseInt(balanceStr, 10);
-    const usdcBalance = balance / 1000000;
-    console.log(`USDC balance found: ${usdcBalance} USDC (${balance} units)`);
-    return usdcBalance;
+    return balance / 1000000;
   } catch (error) {
-    console.error("Error fetching USDC balance with view function:", error);
     try {
-      const allResources = await fetch(`https://fullnode.testnet.aptoslabs.com/v1/accounts/${accountAddress}/resources`)
+      const allResources = await fetch(`https://fullnode.mainnet.aptoslabs.com/v1/accounts/${accountAddress}/resources`)
         .then((res) => res.json())
         .catch(() => []);
-      console.log(`Fallback: Checking ${allResources.length} account resources`);
       const usdcResource = allResources.find(
         (resource: any) =>
           resource.type.includes(USDC_METADATA) ||
           (resource.type.includes("coin::CoinStore") && resource.type.toLowerCase().includes("usdc")) ||
-          resource.type.includes("0x1::coin::CoinStore<0x")
+          resource.type.includes("0x1::coin::CoinStore<0x"),
       );
       if (usdcResource) {
-        console.log("Found USDC resource via fallback:", usdcResource);
         const balance = parseInt(usdcResource.data.coin?.value || usdcResource.data.balance || "0");
         return balance / 1000000;
       }
       const coinStoreResponse = await fetch(
-        `https://fullnode.testnet.aptoslabs.com/v1/accounts/${accountAddress}/resource/0x1::coin::CoinStore<${USDC_METADATA}>`
+        `https://fullnode.mainnet.aptoslabs.com/v1/accounts/${accountAddress}/resource/0x1::coin::CoinStore<${USDC_METADATA}>`,
       )
         .then((res) => res.json())
         .catch(() => null);
       if (coinStoreResponse?.data?.coin?.value) {
-        console.log("Found USDC coin store via direct query:", coinStoreResponse.data);
         return parseInt(coinStoreResponse.data.coin.value) / 1000000;
       }
     } catch (fallbackError) {
-      console.error("Fallback USDC balance fetch also failed:", fallbackError);
+      console.error("Error fetching USDC balance:", fallbackError);
     }
-    console.log("Using mock USDC balance for development");
-    return 1500.75;
-  }
-};
-
-export const debugUserResources = async (userAddress: string) => {
-  try {
-    console.log(`Checking resources for user: ${userAddress}`);
-    const resources = await aptos.getAccountResources({
-      accountAddress: userAddress,
-    });
-    console.log("Available resources:");
-    resources.forEach((resource) => {
-      console.log(`- ${resource.type}`);
-    });
-    const creditResources = resources.filter((r) => r.type.includes("credit_manager") || r.type.includes("CreditLine"));
-    console.log("Credit-related resources:", creditResources);
-    return resources;
-  } catch (error) {
-    console.error("Error fetching user resources:", error);
-    return [];
+    return 0;
   }
 };
 
@@ -89,7 +65,7 @@ export const checkLenderExists = async (lenderAddress: string): Promise<boolean>
     const [exists] = await aptos.view<[boolean]>({
       payload: {
         function: `${CONTRACT_ADDRESS}::lending_pool::lender_exists`,
-        functionArguments: [CONTRACT_ADDRESS, lenderAddress],
+        functionArguments: [ADMIN_ADDRESS, lenderAddress],
       },
     });
     return exists;
@@ -104,7 +80,7 @@ export const getPoolUtilization = async (): Promise<number> => {
     const [utilizationBasisPoints] = await aptos.view<[string]>({
       payload: {
         function: `${CONTRACT_ADDRESS}::lending_pool::get_utilization_rate`,
-        functionArguments: [CONTRACT_ADDRESS],
+        functionArguments: [ADMIN_ADDRESS],
       },
     });
     return parseInt(utilizationBasisPoints) / 100;
@@ -116,22 +92,41 @@ export const getPoolUtilization = async (): Promise<number> => {
 
 export const checkCreditLineExists = async (userAddress: string): Promise<boolean> => {
   try {
-    await aptos.getAccountResource({
-      accountAddress: userAddress,
-      resourceType: `${CONTRACT_ADDRESS}::credit_manager::CreditLine`,
-    });
-    return true;
+    const creditInfo = await getCreditLineInfo(userAddress);
+    return creditInfo !== null && (creditInfo.isActive || creditInfo.creditLimit > 0);
   } catch (error: any) {
-    if (error.message?.includes("resource_not_found") || error.message?.includes("404")) {
-      return false;
-    }
-    console.error("Error checking credit line existence:", error);
     return false;
   }
 };
 
+export const checkCreditIncreaseEligibility = async (
+  userAddress: string,
+): Promise<{
+  eligible: boolean;
+  newLimit: number;
+} | null> => {
+  try {
+    console.log(`Checking credit increase eligibility for user: ${userAddress}`);
+
+    const [eligible, newLimit] = await aptos.view<[boolean, string]>({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::credit_manager::check_credit_increase_eligibility`,
+        functionArguments: [ADMIN_ADDRESS, userAddress],
+      },
+    });
+
+    return {
+      eligible,
+      newLimit: unitsToUsdc(newLimit),
+    };
+  } catch (error: any) {
+    console.error("Error checking credit increase eligibility:", error);
+    return null;
+  }
+};
+
 export const getCreditLineInfo = async (
-  userAddress: string
+  userAddress: string,
 ): Promise<{
   creditLimit: number;
   currentDebt: number;
@@ -141,16 +136,30 @@ export const getCreditLineInfo = async (
   collateral: number;
 } | null> => {
   try {
-    const [collateralDeposited, creditLimit, _borrowedAmount, _interestAccrued, totalDebt, repaymentDueDate, isActive] =
+    const creditManagerExists = await checkCreditManagerInitialized();
+    if (!creditManagerExists) {
+      return {
+        creditLimit: 0,
+        currentDebt: 0,
+        availableCredit: 0,
+        isActive: false,
+        lastBorrowTimestamp: 0,
+        collateral: 0,
+      };
+    }
+
+    const [collateralDeposited, creditLimit, _borrowedAmount, _totalInterest, totalDebt, repaymentDueDate, isActive] =
       await aptos.view<[string, string, string, string, string, string, boolean]>({
         payload: {
           function: `${CONTRACT_ADDRESS}::credit_manager::get_credit_info`,
-          functionArguments: [CONTRACT_ADDRESS, userAddress],
+          functionArguments: [ADMIN_ADDRESS, userAddress],
         },
       });
+
     const creditLimitUsdc = unitsToUsdc(creditLimit);
     const currentDebtUsdc = unitsToUsdc(totalDebt);
     const availableCredit = creditLimitUsdc - currentDebtUsdc;
+
     return {
       creditLimit: creditLimitUsdc,
       currentDebt: currentDebtUsdc,
@@ -160,13 +169,123 @@ export const getCreditLineInfo = async (
       collateral: unitsToUsdc(collateralDeposited),
     };
   } catch (error: any) {
-    console.error("Error fetching credit line info:", error);
+    if (error.message?.includes("Function not found") || error.message?.includes("FUNCTION_NOT_FOUND")) {
+      return {
+        creditLimit: 0,
+        currentDebt: 0,
+        availableCredit: 0,
+        isActive: false,
+        lastBorrowTimestamp: 0,
+        collateral: 0,
+      };
+    }
+    return null;
+  }
+};
+
+export const checkCreditManagerInitialized = async (): Promise<boolean> => {
+  try {
+    await aptos.view({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::credit_manager::is_paused`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    });
+    return true;
+  } catch (error: any) {
+    if (
+      error.message?.includes("Failed to borrow global resource") ||
+      error.message?.includes("resource_not_found") ||
+      error.message?.includes("Resource not found")
+    ) {
+    } else {
+    }
+    return false;
+  }
+};
+
+export const checkAllContractsInitialized = async (): Promise<{
+  creditManager: boolean;
+  lendingPool: boolean;
+  reputationManager: boolean;
+  collateralVault: boolean;
+  interestRateModel: boolean;
+  allInitialized: boolean;
+}> => {
+  const results = await Promise.allSettled([
+    aptos.view({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::credit_manager::is_paused`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    }),
+    aptos.view({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::lending_pool::get_total_deposited`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    }),
+    aptos.view({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::reputation_manager::get_user_count`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    }),
+    aptos.view({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::credit_manager::get_fixed_interest_rate`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    }),
+    aptos.view({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::credit_manager::get_all_borrowers`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    }),
+  ]);
+
+  const status = {
+    creditManager: results[0].status === "fulfilled",
+    lendingPool: results[1].status === "fulfilled",
+    reputationManager: results[2].status === "fulfilled",
+    collateralVault: results[3].status === "fulfilled",
+    interestRateModel: results[4].status === "fulfilled",
+    allInitialized: false,
+  };
+
+  status.allInitialized = Object.values(status).every((v) => v === true);
+  return status;
+};
+
+export const getRepaymentHistory = async (
+  userAddress: string,
+): Promise<{
+  onTimeRepayments: number;
+  lateRepayments: number;
+  totalRepaid: number;
+} | null> => {
+  try {
+    const [onTimeRepayments, lateRepayments, totalRepaid] = await aptos.view<[string, string, string]>({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::credit_manager::get_repayment_history`,
+        functionArguments: [ADMIN_ADDRESS, userAddress],
+      },
+    });
+
+    return {
+      onTimeRepayments: parseInt(onTimeRepayments),
+      lateRepayments: parseInt(lateRepayments),
+      totalRepaid: unitsToUsdc(totalRepaid),
+    };
+  } catch (error: any) {
+    console.error("Error fetching repayment history:", error);
     return null;
   }
 };
 
 export const getComprehensiveCreditInfo = async (
-  userAddress: string
+  userAddress: string,
 ): Promise<{
   creditLimit: number;
   currentDebt: number;
@@ -177,24 +296,26 @@ export const getComprehensiveCreditInfo = async (
   isActive: boolean;
 } | null> => {
   try {
-    const [creditLimit, currentDebt, totalBorrowed, totalRepaid, collateralDeposited, lastBorrowTimestamp, isActive] =
-      await aptos.view<[string, string, string, string, string, string, boolean]>({
-        payload: {
-          function: `${CONTRACT_ADDRESS}::credit_manager::get_credit_info`,
-          functionArguments: [CONTRACT_ADDRESS, userAddress],
-        },
-      });
-    return {
-      creditLimit: unitsToUsdc(creditLimit),
-      currentDebt: unitsToUsdc(currentDebt),
-      totalBorrowed: unitsToUsdc(totalBorrowed),
-      totalRepaid: unitsToUsdc(totalRepaid),
-      collateralDeposited: unitsToUsdc(collateralDeposited),
-      lastBorrowTimestamp: parseInt(lastBorrowTimestamp),
-      isActive,
-    };
+    // Get credit info and repayment history using SDK view functions
+    const [creditInfo, repaymentHistory] = await Promise.all([
+      getCreditLineInfo(userAddress),
+      getRepaymentHistory(userAddress),
+    ]);
+
+    if (creditInfo) {
+      return {
+        creditLimit: creditInfo.creditLimit,
+        currentDebt: creditInfo.currentDebt,
+        totalBorrowed: creditInfo.currentDebt, // Current debt as approximation
+        totalRepaid: repaymentHistory?.totalRepaid || 0,
+        collateralDeposited: creditInfo.collateral,
+        lastBorrowTimestamp: creditInfo.lastBorrowTimestamp,
+        isActive: creditInfo.isActive,
+      };
+    }
+
+    return null;
   } catch (error: any) {
-    console.error("Error fetching comprehensive credit info:", error);
     return null;
   }
 };
@@ -246,7 +367,7 @@ export const calculateAccruedInterest = (
   principalUsdc: number,
   annualRateBasisPoints: number,
   borrowTimestamp: number,
-  gracePeriodSeconds: number = 2592000
+  gracePeriodSeconds: number = 2592000,
 ): number => {
   const currentTime = Math.floor(Date.now() / 1000);
   const graceEndTime = borrowTimestamp + gracePeriodSeconds;
@@ -265,7 +386,7 @@ export const setupPreAuthorization = async (
   _borrowerAddress: string,
   totalLimitUsdc: number,
   perTxLimitUsdc: number,
-  durationHours: number
+  durationHours: number,
 ) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::setup_pre_authorization`,
@@ -282,23 +403,14 @@ export const setupPreAuthorization = async (
 
 export const getPreAuthStatus = async (_borrowerAddress: string) => {
   try {
-    const [totalLimit, usedAmount, expiresAt, perTxLimit, isActive] = await aptos.view<
-      [string, string, string, string, boolean]
-    >({
-      payload: {
-        function: `${CONTRACT_ADDRESS}::credit_manager::get_pre_auth_status`,
-        functionArguments: [CONTRACT_ADDRESS, _borrowerAddress],
-      },
-    });
     return {
-      totalLimit: unitsToUsdc(totalLimit),
-      usedAmount: unitsToUsdc(usedAmount),
-      expiresAt: parseInt(expiresAt),
-      perTxLimit: unitsToUsdc(perTxLimit),
-      isActive,
+      totalLimit: 0,
+      usedAmount: 0,
+      expiresAt: 0,
+      perTxLimit: 0,
+      isActive: false,
     };
   } catch (error) {
-    console.error("Error getting pre-auth status:", error);
     return null;
   }
 };
@@ -306,7 +418,7 @@ export const getPreAuthStatus = async (_borrowerAddress: string) => {
 export const executeSignlessPayment = async (recipientAddress: string, amountUsdc: number) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::borrow_and_pay`,
-    functionArguments: [CONTRACT_ADDRESS, recipientAddress, usdcToUnits(amountUsdc)],
+    functionArguments: [ADMIN_ADDRESS, recipientAddress, usdcToUnits(amountUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -315,11 +427,11 @@ export const executeSignlessPayment = async (recipientAddress: string, amountUsd
 export const updatePreAuthLimits = async (
   _borrowerAddress: string,
   newTotalLimitUsdc: number,
-  newPerTxLimitUsdc: number
+  newPerTxLimitUsdc: number,
 ) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::update_pre_auth_limits`,
-    functionArguments: [CONTRACT_ADDRESS, usdcToUnits(newTotalLimitUsdc), usdcToUnits(newPerTxLimitUsdc)],
+    functionArguments: [ADMIN_ADDRESS, usdcToUnits(newTotalLimitUsdc), usdcToUnits(newPerTxLimitUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -328,7 +440,7 @@ export const updatePreAuthLimits = async (
 export const togglePreAuthorization = async (_borrowerAddress: string, enable: boolean) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::toggle_pre_authorization`,
-    functionArguments: [CONTRACT_ADDRESS, enable],
+    functionArguments: [ADMIN_ADDRESS, enable],
     typeArguments: [],
   };
   return payload;
@@ -337,7 +449,7 @@ export const togglePreAuthorization = async (_borrowerAddress: string, enable: b
 export const openCreditLine = async (_borrowerAddress: string, collateralAmountUsdc: number) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::open_credit_line`,
-    functionArguments: [CONTRACT_ADDRESS, usdcToUnits(collateralAmountUsdc)],
+    functionArguments: [ADMIN_ADDRESS, usdcToUnits(collateralAmountUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -346,7 +458,7 @@ export const openCreditLine = async (_borrowerAddress: string, collateralAmountU
 export const addCollateral = async (_borrowerAddress: string, collateralAmountUsdc: number) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::add_collateral`,
-    functionArguments: [CONTRACT_ADDRESS, usdcToUnits(collateralAmountUsdc)],
+    functionArguments: [ADMIN_ADDRESS, usdcToUnits(collateralAmountUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -355,7 +467,7 @@ export const addCollateral = async (_borrowerAddress: string, collateralAmountUs
 export const borrowFunds = async (_borrowerAddress: string, amountUsdc: number) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::borrow`,
-    functionArguments: [CONTRACT_ADDRESS, usdcToUnits(amountUsdc)],
+    functionArguments: [ADMIN_ADDRESS, usdcToUnits(amountUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -364,7 +476,7 @@ export const borrowFunds = async (_borrowerAddress: string, amountUsdc: number) 
 export const repayLoan = async (_borrowerAddress: string, principalUsdc: number, interestUsdc: number) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::credit_manager::repay`,
-    functionArguments: [CONTRACT_ADDRESS, usdcToUnits(principalUsdc), usdcToUnits(interestUsdc)],
+    functionArguments: [ADMIN_ADDRESS, usdcToUnits(principalUsdc), usdcToUnits(interestUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -373,7 +485,7 @@ export const repayLoan = async (_borrowerAddress: string, principalUsdc: number,
 export const depositCollateral = async (_borrowerAddress: string, amountUsdc: number) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::collateral_vault::deposit_collateral`,
-    functionArguments: [CONTRACT_ADDRESS, usdcToUnits(amountUsdc)],
+    functionArguments: [ADMIN_ADDRESS, usdcToUnits(amountUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -382,7 +494,7 @@ export const depositCollateral = async (_borrowerAddress: string, amountUsdc: nu
 export const depositToLendingPool = async (_lenderAddress: string, amountUsdc: number) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::lending_pool::deposit`,
-    functionArguments: [CONTRACT_ADDRESS, usdcToUnits(amountUsdc)],
+    functionArguments: [ADMIN_ADDRESS, usdcToUnits(amountUsdc)],
     typeArguments: [],
   };
   return payload;
@@ -391,7 +503,7 @@ export const depositToLendingPool = async (_lenderAddress: string, amountUsdc: n
 export const initializeUserReputation = async (_userAddress: string) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::reputation_manager::initialize_user`,
-    functionArguments: [CONTRACT_ADDRESS],
+    functionArguments: [ADMIN_ADDRESS],
     typeArguments: [],
   };
   return payload;
@@ -402,7 +514,7 @@ export const checkUserReputationInitialized = async (userAddress: string): Promi
     const [isInitialized] = await aptos.view<[boolean]>({
       payload: {
         function: `${CONTRACT_ADDRESS}::reputation_manager::is_user_initialized`,
-        functionArguments: [CONTRACT_ADDRESS, userAddress],
+        functionArguments: [ADMIN_ADDRESS, userAddress],
       },
     });
     return isInitialized;
@@ -413,7 +525,7 @@ export const checkUserReputationInitialized = async (userAddress: string): Promi
 };
 
 export const getUserComprehensiveStatus = async (
-  userAddress: string
+  userAddress: string,
 ): Promise<{
   hasReputation: boolean;
   hasCreditLine: boolean;
@@ -454,12 +566,473 @@ export const getUserComprehensiveStatus = async (
   }
 };
 
+// New view functions from updated contracts
+
+export const getLenderInfo = async (
+  lenderAddress: string,
+): Promise<{
+  depositedAmount: number;
+  earnedInterest: number;
+  depositTimestamp: number;
+} | null> => {
+  try {
+    const [depositedAmount, earnedInterest, depositTimestamp] = await aptos.view<[string, string, string]>({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::lending_pool::get_lender_info`,
+        functionArguments: [ADMIN_ADDRESS, lenderAddress],
+      },
+    });
+
+    return {
+      depositedAmount: unitsToUsdc(depositedAmount),
+      earnedInterest: unitsToUsdc(earnedInterest),
+      depositTimestamp: parseInt(depositTimestamp),
+    };
+  } catch (error) {
+    console.error("Error fetching lender info:", error);
+    return null;
+  }
+};
+
+export const getReputationData = async (
+  userAddress: string,
+): Promise<{
+  score: number;
+  lastUpdated: number;
+  totalRepayments: number;
+  onTimeRepayments: number;
+  lateRepayments: number;
+  defaults: number;
+  tier: number;
+  isInitialized: boolean;
+} | null> => {
+  try {
+    const [score, lastUpdated, totalRepayments, onTimeRepayments, lateRepayments, defaults, tier, isInitialized] =
+      await aptos.view<[string, string, string, string, string, string, number, boolean]>({
+        payload: {
+          function: `${CONTRACT_ADDRESS}::reputation_manager::get_reputation_data`,
+          functionArguments: [ADMIN_ADDRESS, userAddress],
+        },
+      });
+
+    return {
+      score: parseInt(score),
+      lastUpdated: parseInt(lastUpdated),
+      totalRepayments: parseInt(totalRepayments),
+      onTimeRepayments: parseInt(onTimeRepayments),
+      lateRepayments: parseInt(lateRepayments),
+      defaults: parseInt(defaults),
+      tier,
+      isInitialized,
+    };
+  } catch (error) {
+    console.error("Error fetching reputation data:", error);
+    return null;
+  }
+};
+
+export const getAllBorrowers = async (): Promise<string[]> => {
+  try {
+    const [borrowers] = await aptos.view<[string[]]>({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::credit_manager::get_all_borrowers`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    });
+    return borrowers;
+  } catch (error) {
+    console.error("Error fetching all borrowers:", error);
+    return [];
+  }
+};
+
+export const getAllLenders = async (): Promise<string[]> => {
+  try {
+    const [lenders] = await aptos.view<[string[]]>({
+      payload: {
+        function: `${CONTRACT_ADDRESS}::lending_pool::get_all_lenders`,
+        functionArguments: [ADMIN_ADDRESS],
+      },
+    });
+    return lenders;
+  } catch (error) {
+    console.error("Error fetching all lenders:", error);
+    return [];
+  }
+};
+
+export const getPoolStats = async (): Promise<{
+  totalDeposited: number;
+  totalBorrowed: number;
+  totalRepaid: number;
+  protocolFeesCollected: number;
+  availableLiquidity: number;
+  utilizationRate: number;
+  isPaused: boolean;
+} | null> => {
+  try {
+    // Use single resource fetch instead of multiple API calls
+    const resource = await aptos.getAccountResource({
+      accountAddress: ADMIN_ADDRESS,
+      resourceType: `${CONTRACT_ADDRESS}::lending_pool::LendingPool`,
+    });
+
+    if (resource && resource.data) {
+      const poolData = resource.data as any;
+
+      const totalDeposited = unitsToUsdc(poolData.total_deposited || "0");
+      const totalBorrowed = unitsToUsdc(poolData.total_borrowed || "0");
+      const totalRepaid = unitsToUsdc(poolData.total_repaid || "0");
+      const protocolFeesCollected = unitsToUsdc(poolData.protocol_fees_collected || "0");
+
+      // Calculate utilization rate
+      const currentBorrowed = Math.max(0, totalBorrowed - totalRepaid);
+      const utilizationRate = totalDeposited > 0 ? (currentBorrowed / totalDeposited) * 100 : 0;
+
+      // Calculate available liquidity
+      const availableLiquidity = Math.max(0, totalDeposited - currentBorrowed);
+
+      return {
+        totalDeposited,
+        totalBorrowed,
+        totalRepaid,
+        protocolFeesCollected,
+        availableLiquidity,
+        utilizationRate,
+        isPaused: poolData.is_paused || false,
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Error fetching pool stats:", error);
+    return null;
+  }
+};
+
+export const getCreditManagerInfo = async (): Promise<{
+  admin: string;
+  lendingPoolAddr: string;
+  fixedInterestRate: number;
+  isPaused: boolean;
+} | null> => {
+  try {
+    const [admin, lendingPoolAddr, fixedInterestRate, isPaused] = await Promise.all([
+      aptos
+        .view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::credit_manager::get_admin`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => result),
+      aptos
+        .view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::credit_manager::get_lending_pool_addr`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => result),
+      aptos
+        .view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::credit_manager::get_fixed_interest_rate`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => parseInt(result)),
+      aptos
+        .view<[boolean]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::credit_manager::is_paused`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => result),
+    ]);
+
+    return {
+      admin,
+      lendingPoolAddr,
+      fixedInterestRate,
+      isPaused,
+    };
+  } catch (error) {
+    console.error("Error fetching credit manager info:", error);
+    return null;
+  }
+};
+
+export const getReputationManagerInfo = async (): Promise<{
+  admin: string;
+  creditManager: string;
+  userCount: number;
+  parameters: {
+    onTimeBonus: number;
+    latePaymentPenalty: number;
+    defaultPenalty: number;
+    maxScoreChange: number;
+  };
+  tierThresholds: {
+    min: number;
+    bronze: number;
+    silver: number;
+    gold: number;
+    max: number;
+  };
+  isPaused: boolean;
+} | null> => {
+  try {
+    const [admin, creditManager, userCount, parameters, tierThresholds, isPaused] = await Promise.all([
+      aptos
+        .view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::reputation_manager::get_admin`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => result),
+      aptos
+        .view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::reputation_manager::get_credit_manager`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => result),
+      aptos
+        .view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::reputation_manager::get_user_count`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => parseInt(result)),
+      aptos
+        .view<[string, string, string, string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::reputation_manager::get_parameters`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([onTimeBonus, latePaymentPenalty, defaultPenalty, maxScoreChange]) => ({
+          onTimeBonus: parseInt(onTimeBonus),
+          latePaymentPenalty: parseInt(latePaymentPenalty),
+          defaultPenalty: parseInt(defaultPenalty),
+          maxScoreChange: parseInt(maxScoreChange),
+        })),
+      aptos
+        .view<[string, string, string, string, string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::reputation_manager::get_tier_thresholds`,
+            functionArguments: [],
+          },
+        })
+        .then(([min, bronze, silver, gold, max]) => ({
+          min: parseInt(min),
+          bronze: parseInt(bronze),
+          silver: parseInt(silver),
+          gold: parseInt(gold),
+          max: parseInt(max),
+        })),
+      aptos
+        .view<[boolean]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::reputation_manager::is_paused`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        })
+        .then(([result]) => result),
+    ]);
+
+    return {
+      admin,
+      creditManager,
+      userCount,
+      parameters,
+      tierThresholds,
+      isPaused,
+    };
+  } catch (error) {
+    console.error("Error fetching reputation manager info:", error);
+    return null;
+  }
+};
+
+export const testContractConnectivity = async (): Promise<{
+  creditManagerExists: boolean;
+  lendingPoolExists: boolean;
+  reputationManagerExists: boolean;
+  availableModules: string[];
+  availableResources: string[];
+  error?: string;
+}> => {
+  try {
+    const accountResources = await aptos.getAccountResources({ accountAddress: ADMIN_ADDRESS });
+    const resourceTypes = accountResources.map((resource) => resource.type);
+
+    const accountModules = await aptos.getAccountModules({ accountAddress: ADMIN_ADDRESS });
+    const moduleNames = accountModules.map((module) => module.abi?.name || "unknown");
+
+    // Test basic view functions that should always work if contracts are deployed
+    const results = await Promise.allSettled([
+      aptos.view({
+        payload: {
+          function: `${CONTRACT_ADDRESS}::credit_manager::is_paused`,
+          functionArguments: [ADMIN_ADDRESS],
+        },
+      }),
+      aptos.view({
+        payload: {
+          function: `${CONTRACT_ADDRESS}::lending_pool::is_paused`,
+          functionArguments: [ADMIN_ADDRESS],
+        },
+      }),
+      aptos.view({
+        payload: {
+          function: `${CONTRACT_ADDRESS}::reputation_manager::is_paused`,
+          functionArguments: [ADMIN_ADDRESS],
+        },
+      }),
+    ]);
+
+    return {
+      creditManagerExists: results[0].status === "fulfilled",
+      lendingPoolExists: results[1].status === "fulfilled",
+      reputationManagerExists: results[2].status === "fulfilled",
+      availableModules: moduleNames,
+      availableResources: resourceTypes,
+      error: results.some((r) => r.status === "rejected")
+        ? results.find((r) => r.status === "rejected")?.reason?.message || "Unknown error"
+        : undefined,
+    };
+  } catch (error: any) {
+    return {
+      creditManagerExists: false,
+      lendingPoolExists: false,
+      reputationManagerExists: false,
+      availableModules: [],
+      availableResources: [],
+      error: error.message || "Unknown connectivity error",
+    };
+  }
+};
+
+export const stakeCollateralAndOpenCreditLine = async (
+  collateralAmountUsdc: number,
+  signAndSubmitTransaction: any,
+  _account?: any,
+): Promise<{ success: boolean; hash?: string; error?: string }> => {
+  const payload = {
+    data: {
+      function: `${CONTRACT_ADDRESS}::credit_manager::open_credit_line`,
+      functionArguments: [ADMIN_ADDRESS, usdcToUnits(collateralAmountUsdc)],
+    },
+  };
+
+  try {
+    const result = await signAndSubmitTransaction(payload);
+    return { success: true, hash: result.hash };
+  } catch (error: any) {
+    return { success: false, error: handleTransactionError(error) };
+  }
+};
+
+export const addMoreCollateral = async (
+  additionalAmountUsdc: number,
+  signAndSubmitTransaction: any,
+  _account?: any,
+): Promise<{ success: boolean; hash?: string; error?: string }> => {
+  const payload = {
+    data: {
+      function: `${CONTRACT_ADDRESS}::credit_manager::add_collateral`,
+      functionArguments: [ADMIN_ADDRESS, usdcToUnits(additionalAmountUsdc)],
+    },
+  };
+
+  try {
+    const result = await signAndSubmitTransaction(payload);
+    return { success: true, hash: result.hash };
+  } catch (error: any) {
+    return { success: false, error: handleTransactionError(error) };
+  }
+};
+
+export const withdrawCollateral = async (
+  withdrawAmountUsdc: number,
+  signAndSubmitTransaction: any,
+  _account?: any,
+): Promise<{ success: boolean; hash?: string; error?: string }> => {
+  const payload = {
+    data: {
+      function: `${CONTRACT_ADDRESS}::credit_manager::withdraw_collateral`,
+      functionArguments: [ADMIN_ADDRESS, usdcToUnits(withdrawAmountUsdc)],
+    },
+  };
+
+  try {
+    const result = await signAndSubmitTransaction(payload);
+    return { success: true, hash: result.hash };
+  } catch (error: any) {
+    return { success: false, error: handleTransactionError(error) };
+  }
+};
+
+export const checkCollateralStatus = async (
+  userAddress: string,
+): Promise<{
+  hasActiveCreditLine: boolean;
+  collateralAmount: number;
+  creditLimit: number;
+  currentDebt: number;
+  availableCredit: number;
+  canWithdraw: number;
+} | null> => {
+  try {
+    const creditInfo = await getCreditLineInfo(userAddress);
+
+    if (!creditInfo) {
+      return {
+        hasActiveCreditLine: false,
+        collateralAmount: 0,
+        creditLimit: 0,
+        currentDebt: 0,
+        availableCredit: 0,
+        canWithdraw: 0,
+      };
+    }
+
+    const canWithdraw = creditInfo.currentDebt === 0 ? creditInfo.collateral : 0;
+
+    return {
+      hasActiveCreditLine: creditInfo.isActive,
+      collateralAmount: creditInfo.collateral,
+      creditLimit: creditInfo.creditLimit,
+      currentDebt: creditInfo.currentDebt,
+      availableCredit: creditInfo.availableCredit,
+      canWithdraw,
+    };
+  } catch (error) {
+    console.error("Error checking collateral status:", error);
+    return null;
+  }
+};
+
+export const getMinimumCollateralAmount = (): number => {
+  return 1; // 1 USDC minimum
+};
+
+export const getCollateralRatio = (): number => {
+  return 100; // 1:1 ratio (100%)
+};
+
 export const checkPoolLiquidity = async (requiredAmountUsdc: number): Promise<boolean> => {
   try {
     const [liquidity] = await aptos.view<[string]>({
       payload: {
         function: `${CONTRACT_ADDRESS}::lending_pool::get_available_liquidity`,
-        functionArguments: [CONTRACT_ADDRESS],
+        functionArguments: [ADMIN_ADDRESS],
       },
     });
 
@@ -476,7 +1049,7 @@ export const checkPoolLiquidity = async (requiredAmountUsdc: number): Promise<bo
 export const validatePaymentPreconditions = async (
   userAddress: string,
   recipientAddress: string,
-  amountUsdc: number
+  amountUsdc: number,
 ): Promise<{ isValid: boolean; error?: string }> => {
   try {
     // 1. Check if amount is valid

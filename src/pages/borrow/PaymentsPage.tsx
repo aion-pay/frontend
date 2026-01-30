@@ -35,7 +35,9 @@ import { WalletSelector } from "../../components/WalletSelector";
 import {
   aptos,
   CONTRACT_ADDRESS,
+  ADMIN_ADDRESS,
   fetchUsdcBalance,
+  getCreditLineInfo as getCreditLineInfoFromLib,
   unitsToUsdc,
   usdcToUnits,
   validateAptosAddress,
@@ -920,7 +922,7 @@ const RecentTransactions = ({
 
   const openTransactionHash = (hash?: string) => {
     if (hash) {
-      window.open(`https://evm-testnet.flowscan.io/tx/${hash}`, "_blank");
+      window.open(`https://evm.flowscan.io/tx/${hash}`, "_blank");
     }
   };
 
@@ -1027,35 +1029,16 @@ export default function PaymentsPage() {
     try {
       console.log(`Fetching credit line info for ${account.address.toString()}`);
 
-      // Use the view function from Integration Guide
-      const [collateralDeposited, creditLimit, , , totalDebt, repaymentDueDate, isActive] = await aptos.view<
-        [string, string, string, string, string, string, boolean]
-      >({
-        payload: {
-          function: `${CONTRACT_ADDRESS}::credit_manager::get_credit_info`,
-          functionArguments: [CONTRACT_ADDRESS, account.address.toString()],
-        },
-      });
+      // Use the updated getCreditLineInfo function from lib
+      const creditInfo = await getCreditLineInfoFromLib(account.address.toString());
 
-      console.log("Found credit info:", {
-        collateralDeposited,
-        creditLimit,
-        totalDebt,
-        isActive,
-      });
+      if (!creditInfo) {
+        return null;
+      }
 
-      const creditLimitUsdc = unitsToUsdc(creditLimit);
-      const currentDebtUsdc = unitsToUsdc(totalDebt);
-      const availableCredit = creditLimitUsdc - currentDebtUsdc;
+      console.log("Found credit info:", creditInfo);
 
-      return {
-        creditLimit: creditLimitUsdc,
-        currentDebt: currentDebtUsdc,
-        availableCredit: Math.max(0, availableCredit), // Ensure non-negative
-        isActive,
-        lastBorrowTimestamp: parseInt(repaymentDueDate),
-        collateral: unitsToUsdc(collateralDeposited),
-      };
+      return creditInfo;
     } catch (error: unknown) {
       console.error("Error fetching credit line info:", error);
       return null;
@@ -1072,7 +1055,7 @@ export default function PaymentsPage() {
       >({
         payload: {
           function: `${CONTRACT_ADDRESS}::credit_manager::get_pre_auth_status`,
-          functionArguments: [CONTRACT_ADDRESS, account.address.toString()],
+          functionArguments: [ADMIN_ADDRESS, account.address.toString()],
         },
       });
 
@@ -1124,7 +1107,7 @@ export default function PaymentsPage() {
       data: {
         function: `${CONTRACT_ADDRESS}::credit_manager::borrow_and_pay`,
         functionArguments: [
-          CONTRACT_ADDRESS, // manager_addr
+          ADMIN_ADDRESS, // manager_addr
           recipientAddress, // recipient
           usdcToUnits(amountUsdc), // amount
         ],

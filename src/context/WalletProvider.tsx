@@ -7,7 +7,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     <AptosWalletAdapterProvider
       autoConnect={true}
       dappConfig={{
-        network: Network.TESTNET,
+        network: Network.MAINNET,
       }}
       optInWallets={["Continue with Google", "Petra", "Nightly", "Pontem Wallet"]}
       onError={(error) => {

@@ -8,12 +8,15 @@ import LoginWithGoogleButton from "../../components/LoginWithGoogleButton";
 import { WalletSelector } from "../../components/WalletSelector";
 import { SEO } from "../../components/SEO";
 import {
+  aptos,
   CONTRACT_ADDRESS,
+  ADMIN_ADDRESS,
   fetchUsdcBalance,
   handleTransactionError,
   unitsToUsdc,
   usdcToUnits,
   validateUsdcAmount,
+  getPoolStats,
 } from "../../lib/contractUtils";
 
 type LockupPeriod = {
@@ -103,29 +106,37 @@ export default function Deposit() {
 
   const getLendingPoolStats = async () => {
     try {
-      // Use the new contract address from Integration Guide
-      const resource = await fetch(
-        `https://fullnode.testnet.aptoslabs.com/v1/accounts/${CONTRACT_ADDRESS}/resource/${CONTRACT_ADDRESS}::lending_pool::LendingPool`
-      )
-        .then((res) => res.json())
-        .catch(() => null);
+      console.log("🔍 Fetching lending pool stats...");
 
-      if (resource && resource.data) {
-        const poolData = resource.data;
-        const totalDeposited = unitsToUsdc(poolData.total_deposited || "0");
-        const totalBorrowed = unitsToUsdc(poolData.total_borrowed || "0");
-        const totalRepaid = unitsToUsdc(poolData.total_repaid || "0");
-        const utilizationRate = totalDeposited > 0 ? ((totalBorrowed - totalRepaid) / totalDeposited) * 100 : 0;
+      const poolStats = await getPoolStats();
+
+      if (poolStats) {
+        console.log("✅ Pool stats fetched:", poolStats);
+        const currentBorrowed = Math.max(0, poolStats.totalBorrowed - poolStats.totalRepaid);
 
         setLendingPoolStats({
-          totalDeposited,
-          totalBorrowed: totalBorrowed - totalRepaid,
-          utilizationRate,
+          totalDeposited: poolStats.totalDeposited,
+          totalBorrowed: currentBorrowed,
+          utilizationRate: poolStats.utilizationRate,
+          currentAPY: 12.5,
+        });
+      } else {
+        console.log("❌ Failed to fetch pool stats, setting defaults");
+        setLendingPoolStats({
+          totalDeposited: 0,
+          totalBorrowed: 0,
+          utilizationRate: 0,
           currentAPY: 12.5,
         });
       }
     } catch (error) {
-      console.error("Error fetching lending pool stats:", error);
+      console.error("💥 Error fetching lending pool stats:", error);
+      setLendingPoolStats({
+        totalDeposited: 0,
+        totalBorrowed: 0,
+        utilizationRate: 0,
+        currentAPY: 12.5,
+      });
     }
   };
 
@@ -137,8 +148,6 @@ export default function Deposit() {
     }
 
     const amountInUnits = usdcToUnits(amountUsdc);
-    console.log(`Converting ${amountUsdc} USDC to ${amountInUnits} units`);
-
     const unitsNum = parseInt(amountInUnits, 10);
     if (unitsNum > Number.MAX_SAFE_INTEGER) {
       throw new Error("Amount too large");
@@ -147,11 +156,10 @@ export default function Deposit() {
     const payload: InputTransactionData = {
       data: {
         function: `${CONTRACT_ADDRESS}::lending_pool::deposit`,
-        functionArguments: [CONTRACT_ADDRESS, amountInUnits],
+        functionArguments: [ADMIN_ADDRESS, amountInUnits],
       },
     };
 
-    console.log("Deposit payload:", payload);
     return await signAndSubmitTransaction(payload);
   };
 
@@ -274,7 +282,7 @@ export default function Deposit() {
               <div className="text-xl font-bold text-black">${lendingPoolStats.totalDeposited.toLocaleString()}</div>
             </div>
             <div>
-              <div className="text-gray-600 text-sm">Total Borrowed</div>
+              <div className="text-gray-600 text-sm">Outstanding Debt</div>
               <div className="text-xl font-bold text-black">
                 ${lendingPoolStats.totalBorrowed.toLocaleString()}
               </div>

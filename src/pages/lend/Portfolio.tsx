@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { GlowingButton } from "../../components/GlowingButton";
 import LoginWithGoogleButton from "../../components/LoginWithGoogleButton";
 import { WalletSelector } from "../../components/WalletSelector";
-import { aptos, CONTRACT_ADDRESS, unitsToUsdc, usdcToUnits } from "../../lib/contractUtils";
+import { aptos, CONTRACT_ADDRESS, ADMIN_ADDRESS, unitsToUsdc, usdcToUnits } from "../../lib/contractUtils";
 
 type StatCardProps = {
   title: string;
@@ -390,7 +390,7 @@ export default function Portfolio() {
         >({
           payload: {
             function: `${CONTRACT_ADDRESS}::lending_pool::get_lender_info`,
-            functionArguments: [CONTRACT_ADDRESS, lenderAddress],
+            functionArguments: [ADMIN_ADDRESS, lenderAddress],
           },
         });
 
@@ -410,12 +410,11 @@ export default function Portfolio() {
         console.log("View function failed, trying resource lookup:", viewError);
       }
 
-      // Method 2: Try to get lending pool resource and parse lenders table
-      const resource = await fetch(
-        `https://fullnode.testnet.aptoslabs.com/v1/accounts/${CONTRACT_ADDRESS}/resource/${CONTRACT_ADDRESS}::lending_pool::LendingPool`
-      )
-        .then((res) => res.json())
-        .catch(() => null);
+      // Method 2: Try to get lending pool resource using Aptos SDK
+      const resource = await aptos.getAccountResource({
+        accountAddress: ADMIN_ADDRESS,
+        resourceType: `${CONTRACT_ADDRESS}::lending_pool::LendingPool`,
+      }).catch(() => null);
 
       if (resource?.data) {
         console.log("Found lending pool resource:", resource.data);
@@ -459,7 +458,7 @@ export default function Portfolio() {
         >({
           payload: {
             function: `${CONTRACT_ADDRESS}::lending_pool::get_pool_stats`,
-            functionArguments: [CONTRACT_ADDRESS],
+            functionArguments: [ADMIN_ADDRESS],
           },
         });
 
@@ -468,7 +467,7 @@ export default function Portfolio() {
         const totalRepaidUsdc = unitsToUsdc(totalRepaid);
         const protocolFeesUsdc = unitsToUsdc(protocolFees);
 
-        const netBorrowed = totalBorrowedUsdc - totalRepaidUsdc;
+        const netBorrowed = Math.max(0, totalBorrowedUsdc - totalRepaidUsdc);
         const availableLiquidity = totalDepositedUsdc - netBorrowed;
         const utilizationRate = totalDepositedUsdc > 0 ? (netBorrowed / totalDepositedUsdc) * 100 : 0;
 
@@ -487,12 +486,11 @@ export default function Portfolio() {
         console.log("View function failed, trying resource lookup:", viewError);
       }
 
-      // Method 2: Fallback to resource lookup
-      const resource = await fetch(
-        `https://fullnode.testnet.aptoslabs.com/v1/accounts/${CONTRACT_ADDRESS}/resource/${CONTRACT_ADDRESS}::lending_pool::LendingPool`
-      )
-        .then((res) => res.json())
-        .catch(() => null);
+      // Method 2: Fallback to resource lookup using Aptos SDK
+      const resource = await aptos.getAccountResource({
+        accountAddress: ADMIN_ADDRESS,
+        resourceType: `${CONTRACT_ADDRESS}::lending_pool::LendingPool`,
+      }).catch(() => null);
 
       if (resource?.data) {
         const poolData = resource.data;
@@ -501,7 +499,7 @@ export default function Portfolio() {
         const totalRepaid = unitsToUsdc(poolData.total_repaid || "0");
         const protocolFees = unitsToUsdc(poolData.protocol_fees_collected || "0");
 
-        const netBorrowed = totalBorrowed - totalRepaid;
+        const netBorrowed = Math.max(0, totalBorrowed - totalRepaid);
         const availableLiquidity = totalDeposited - netBorrowed;
         const utilizationRate = totalDeposited > 0 ? (netBorrowed / totalDeposited) * 100 : 0;
 
@@ -531,7 +529,7 @@ export default function Portfolio() {
       const [currentRate] = await aptos.view<[string]>({
         payload: {
           function: `${CONTRACT_ADDRESS}::interest_rate_model::get_current_borrow_rate`,
-          functionArguments: [CONTRACT_ADDRESS],
+          functionArguments: [ADMIN_ADDRESS],
         },
       });
 
@@ -549,7 +547,7 @@ export default function Portfolio() {
       const [earnedInterest] = await aptos.view<[string]>({
         payload: {
           function: `${CONTRACT_ADDRESS}::lending_pool::calculate_earned_interest`,
-          functionArguments: [CONTRACT_ADDRESS, lenderAddress],
+          functionArguments: [ADMIN_ADDRESS, lenderAddress],
         },
       });
 
@@ -573,7 +571,7 @@ export default function Portfolio() {
       data: {
         function: `${CONTRACT_ADDRESS}::lending_pool::withdraw`,
         functionArguments: [
-          CONTRACT_ADDRESS, // pool_addr
+          ADMIN_ADDRESS, // pool_addr
           usdcToUnits(amountUsdc), // amount
         ],
       },
