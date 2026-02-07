@@ -33,12 +33,10 @@ import LoginWithGoogleButton from "../../components/LoginWithGoogleButton";
 import NFCPaymentSender, { type NFCPaymentData } from "../../components/NFCPaymentSender";
 import { WalletSelector } from "../../components/WalletSelector";
 import {
-  aptos,
   CONTRACT_ADDRESS,
   ADMIN_ADDRESS,
   fetchUsdcBalance,
   getCreditLineInfo as getCreditLineInfoFromLib,
-  unitsToUsdc,
   usdcToUnits,
   validateAptosAddress,
   validateUsdcAmount,
@@ -51,14 +49,6 @@ type CreditLineInfo = {
   isActive: boolean;
   lastBorrowTimestamp: number;
   collateral: number;
-};
-
-type PreAuthStatus = {
-  totalLimit: number;
-  usedAmount: number;
-  expiresAt: number;
-  perTxLimit: number;
-  isActive: boolean;
 };
 
 type TransactionStatusState = {
@@ -1010,7 +1000,6 @@ export default function PaymentsPage() {
 
   // Real contract data states
   const [creditLineInfo, setCreditLineInfo] = useState<CreditLineInfo | null>(null);
-  const [preAuthStatus, setPreAuthStatus] = useState<PreAuthStatus | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Transaction states
@@ -1045,53 +1034,7 @@ export default function PaymentsPage() {
     }
   }, [account?.address]);
 
-  // Get pre-authorization status
-  const getPreAuthStatus = useCallback(async (): Promise<PreAuthStatus | null> => {
-    if (!account?.address) return null;
-
-    try {
-      const [totalLimit, usedAmount, expiresAt, perTxLimit, isActive] = await aptos.view<
-        [string, string, string, string, boolean]
-      >({
-        payload: {
-          function: `${CONTRACT_ADDRESS}::credit_manager::get_pre_auth_status`,
-          functionArguments: [ADMIN_ADDRESS, account.address.toString()],
-        },
-      });
-
-      return {
-        totalLimit: unitsToUsdc(totalLimit),
-        usedAmount: unitsToUsdc(usedAmount),
-        expiresAt: parseInt(expiresAt),
-        perTxLimit: unitsToUsdc(perTxLimit),
-        isActive,
-      };
-    } catch {
-      console.log("No pre-authorization found - this is normal until user sets it up");
-      return null;
-    }
-  }, [account?.address]);
-
-  // Setup pre-authorization (one-time setup like getting a credit card)
-  // const setupPreAuthorization = async (totalLimitUsdc: number, perTxLimitUsdc: number, durationHours: number) => {
-  //   if (!account?.address) throw new Error("Wallet not connected");
-
-  //   const payload: InputTransactionData = {
-  //     data: {
-  //       function: `${CONTRACT_ADDRESS}::credit_manager::setup_pre_authorization`,
-  //       functionArguments: [
-  //         CONTRACT_ADDRESS,
-  //         usdcToUnits(totalLimitUsdc),
-  //         usdcToUnits(perTxLimitUsdc),
-  //         durationHours.toString(),
-  //       ],
-  //     },
-  //   };
-
-  //   return await signAndSubmitTransaction(payload);
-  // };
-
-  // Execute instant payment (ultra-low gas) - FIXED TO MATCH INTEGRATION GUIDE
+  // Execute instant payment - FIXED TO MATCH INTEGRATION GUIDE
   const executeInstantPayment = async (recipientAddress: string, amountUsdc: number) => {
     if (!account?.address) throw new Error("Wallet not connected");
 
@@ -1140,13 +1083,11 @@ export default function PaymentsPage() {
       await getUsdcBalance();
 
       // Then try to get credit line info - this might be null for new users
-      const [creditInfo, preAuth] = await Promise.all([getCreditLineInfo(), getPreAuthStatus()]);
+      const creditInfo = await getCreditLineInfo();
 
       console.log("Credit Line Info:", creditInfo);
-      console.log("Pre-Authorization Status:", preAuth);
 
-      setCreditLineInfo(creditInfo); // Fix: Actually set the credit line info
-      setPreAuthStatus(preAuth);
+      setCreditLineInfo(creditInfo);
 
       // Load recent transactions (mock for now, could be fetched from events)
       setTransactions([
@@ -1159,7 +1100,7 @@ export default function PaymentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [connected, account?.address, getUsdcBalance, getCreditLineInfo, getPreAuthStatus]);
+  }, [connected, account?.address, getUsdcBalance, getCreditLineInfo]);
 
   // Handle payment with comprehensive validation
   const handlePayment = async (data: PaymentData): Promise<void> => {
@@ -1351,39 +1292,11 @@ export default function PaymentsPage() {
                 Instant Credit Payments
               </h1>
               <p className="text-gray-600 mt-2 text-lg">
-                Pay instantly with your crypto credit line •
-                {preAuthStatus?.isActive ? " Ultra-low gas enabled ⚡" : " Setup required for ultra-low gas"}
+                Pay instantly with your crypto credit line
               </p>
             </div>
           </div>
         </div>
-
-        {/* Show pre-auth setup if not active */}
-        {/* COMMENTED OUT: Ultra-Fast Payments Section
-        {!preAuthStatus?.isActive && creditLineInfo && creditLineInfo.isActive && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-2xl p-6 mb-8"
-          >
-            <div className="flex items-start gap-4">
-              <Zap className="w-6 h-6 text-yellow-400 mt-1" />
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold text-white mb-2">⚡ Enable Ultra-Fast Payments</h3>
-                <p className="text-gray-300 text-sm mb-4">
-                  Set up instant payments to pay with just 8-9 gas units (98% gas reduction) instead of 500+ units for
-                  regular transactions. This works like getting a credit card - one setup, then instant payments!
-                </p>
-                <GlowingButton onClick={handleSetupPreAuth} className="text-sm">
-                  <Zap className="w-4 h-4" />
-                  Setup Instant Payments
-                </GlowingButton>
-              </div>
-            </div>
-          </motion.div>
-        )}
-        */}
 
         <VirtualCreditCard
           creditLimit={creditLineInfo?.creditLimit || 0}
@@ -1445,44 +1358,6 @@ export default function PaymentsPage() {
           </div>
         </div>
 
-        {/* Pre-auth status panel */}
-        {preAuthStatus?.isActive && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-            className="mt-8 bg-green-50/80 backdrop-blur-2xl border border-green-500/20 rounded-2xl p-6"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-black flex items-center gap-2">
-                <Zap className="w-5 h-5 text-green-400" />
-                Instant Payments Active
-              </h3>
-              <div className="text-sm text-green-400">Ultra-low gas enabled</div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-              <div>
-                <div className="text-gray-600">Total Limit</div>
-                <div className="text-black font-semibold">${preAuthStatus.totalLimit.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-gray-600">Per Transaction</div>
-                <div className="text-black font-semibold">${preAuthStatus.perTxLimit.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-gray-600">Used</div>
-                <div className="text-black font-semibold">${preAuthStatus.usedAmount.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-gray-600">Expires</div>
-                <div className="text-black font-semibold">
-                  {new Date(preAuthStatus.expiresAt * 1000).toLocaleDateString()}
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
       </div>
     </div>
   );

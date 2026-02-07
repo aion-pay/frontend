@@ -8,12 +8,10 @@ import LoginWithGoogleButton from "../../components/LoginWithGoogleButton";
 import { WalletSelector } from "../../components/WalletSelector";
 import { SEO } from "../../components/SEO";
 import {
-  aptos,
   CONTRACT_ADDRESS,
   ADMIN_ADDRESS,
   fetchUsdcBalance,
   handleTransactionError,
-  unitsToUsdc,
   usdcToUnits,
   validateUsdcAmount,
   getPoolStats,
@@ -81,7 +79,7 @@ export default function Deposit() {
   const [usdcBalance, setUsdcBalance] = useState(0);
   const [lendingPoolStats, setLendingPoolStats] = useState({
     totalDeposited: 0,
-    totalBorrowed: 0,
+    availableLiquidity: 0,
     utilizationRate: 0,
     currentAPY: 12.5,
   });
@@ -106,37 +104,18 @@ export default function Deposit() {
 
   const getLendingPoolStats = async () => {
     try {
-      console.log("🔍 Fetching lending pool stats...");
-
       const poolStats = await getPoolStats();
 
       if (poolStats) {
-        console.log("✅ Pool stats fetched:", poolStats);
-        const currentBorrowed = Math.max(0, poolStats.totalBorrowed - poolStats.totalRepaid);
-
         setLendingPoolStats({
           totalDeposited: poolStats.totalDeposited,
-          totalBorrowed: currentBorrowed,
+          availableLiquidity: poolStats.availableLiquidity,
           utilizationRate: poolStats.utilizationRate,
-          currentAPY: 12.5,
-        });
-      } else {
-        console.log("❌ Failed to fetch pool stats, setting defaults");
-        setLendingPoolStats({
-          totalDeposited: 0,
-          totalBorrowed: 0,
-          utilizationRate: 0,
           currentAPY: 12.5,
         });
       }
     } catch (error) {
-      console.error("💥 Error fetching lending pool stats:", error);
-      setLendingPoolStats({
-        totalDeposited: 0,
-        totalBorrowed: 0,
-        utilizationRate: 0,
-        currentAPY: 12.5,
-      });
+      console.error("Error fetching lending pool stats:", error);
     }
   };
 
@@ -235,10 +214,15 @@ export default function Deposit() {
     return (lendingPoolStats.currentAPY * selectedPeriod.multiplier).toFixed(1);
   };
 
+  // Fetch pool stats on mount (no wallet needed for view functions)
+  useEffect(() => {
+    getLendingPoolStats();
+  }, []);
+
+  // Fetch user balance when wallet connects
   useEffect(() => {
     if (connected && account?.address) {
       getUsdcBalance();
-      getLendingPoolStats();
     }
   }, [connected, account?.address]);
 
@@ -282,9 +266,9 @@ export default function Deposit() {
               <div className="text-xl font-bold text-black">${lendingPoolStats.totalDeposited.toLocaleString()}</div>
             </div>
             <div>
-              <div className="text-gray-600 text-sm">Outstanding Debt</div>
+              <div className="text-gray-600 text-sm">Available Liquidity</div>
               <div className="text-xl font-bold text-black">
-                ${lendingPoolStats.totalBorrowed.toLocaleString()}
+                ${lendingPoolStats.availableLiquidity.toLocaleString()}
               </div>
             </div>
             <div>

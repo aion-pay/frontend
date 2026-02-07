@@ -45,8 +45,8 @@ export const StakeCollateral: React.FC = () => {
     setLoadingData(true);
     try {
       const [balance, status] = await Promise.all([
-        fetchUsdcBalance(account.address),
-        checkCollateralStatus(account.address)
+        fetchUsdcBalance(account.address.toString()),
+        checkCollateralStatus(account.address.toString())
       ]);
 
       setUsdcBalance(balance);

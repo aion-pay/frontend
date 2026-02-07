@@ -383,152 +383,112 @@ export default function Portfolio() {
     try {
       console.log(`Fetching lender info for ${lenderAddress}`);
 
-      // Method 1: Try to get lender data using view function
-      try {
-        const [lenderExists, depositedAmount, earnedInterest, depositTimestamp, lastUpdateTimestamp] = await aptos.view<
-          [boolean, string, string, string, string]
-        >({
-          payload: {
-            function: `${CONTRACT_ADDRESS}::lending_pool::get_lender_info`,
-            functionArguments: [ADMIN_ADDRESS, lenderAddress],
-          },
-        });
+      // Contract returns: (deposited_amount, earned_interest, deposit_timestamp)
+      const [depositedAmount, earnedInterest, depositTimestamp] = await aptos.view<
+        [string, string, string]
+      >({
+        payload: {
+          function: `${CONTRACT_ADDRESS}::lending_pool::get_lender_info`,
+          functionArguments: [ADMIN_ADDRESS, lenderAddress],
+        },
+      });
 
-        if (lenderExists) {
-          const lenderPosition: LenderPosition = {
-            depositedAmount: unitsToUsdc(depositedAmount),
-            earnedInterest: unitsToUsdc(earnedInterest),
-            depositTimestamp: parseInt(depositTimestamp),
-            lastUpdateTimestamp: parseInt(lastUpdateTimestamp),
-            apy: 12.5, // This could be fetched from the interest rate model
-          };
-
-          console.log("Found lender data via view function:", lenderPosition);
-          return lenderPosition;
-        }
-      } catch (viewError) {
-        console.log("View function failed, trying resource lookup:", viewError);
+      const deposited = unitsToUsdc(depositedAmount);
+      if (deposited === 0) {
+        console.log("No lender data found");
+        return null;
       }
 
-      // Method 2: Try to get lending pool resource using Aptos SDK
-      const resource = await aptos.getAccountResource({
-        accountAddress: ADMIN_ADDRESS,
-        resourceType: `${CONTRACT_ADDRESS}::lending_pool::LendingPool`,
-      }).catch(() => null);
+      const lenderPosition: LenderPosition = {
+        depositedAmount: deposited,
+        earnedInterest: unitsToUsdc(earnedInterest),
+        depositTimestamp: parseInt(depositTimestamp),
+        lastUpdateTimestamp: parseInt(depositTimestamp),
+        apy: 12.5,
+      };
 
-      if (resource?.data) {
-        console.log("Found lending pool resource:", resource.data);
-
-        // In a real implementation, you'd need to query the lenders table
-        // For now, check if the lender address exists in any lenders list
-        const poolData = resource.data;
-
-        // Check if lender has any deposit history by looking at events or tables
-        // This is a simplified check - in reality you'd query the lenders table
-        if (poolData.total_deposited && parseInt(poolData.total_deposited) > 0) {
-          // Return estimated data based on pool state
-          // This is a fallback approach - real implementation would query the table
-          return {
-            depositedAmount: 1000.0, // Placeholder - would be fetched from table
-            earnedInterest: 50.25, // Placeholder - would be calculated
-            depositTimestamp: Date.now() / 1000 - 15 * 24 * 60 * 60, // 15 days ago
-            lastUpdateTimestamp: Date.now() / 1000,
-            apy: 12.5,
-          };
-        }
-      }
-
-      console.log("No lender data found");
-      return null;
+      console.log("Found lender data via view function:", lenderPosition);
+      return lenderPosition;
     } catch (error) {
       console.error("Error fetching lender info:", error);
-      throw new Error("Failed to fetch lender information");
+      return null;
     }
   };
 
-  // Get pool statistics from the actual contract
+  // Get pool statistics using individual view functions
   const getPoolStats = async () => {
     try {
       console.log("Fetching pool stats from contract");
 
-      // Method 1: Try view function for pool stats
-      try {
-        const [totalDeposited, totalBorrowed, totalRepaid, protocolFees] = await aptos.view<
-          [string, string, string, string]
-        >({
+      const [
+        [totalDepositedStr],
+        [totalBorrowedStr],
+        ,
+        [protocolFeesStr],
+        [availableLiquidityStr],
+        [utilizationRateStr],
+      ] = await Promise.all([
+        aptos.view<[string]>({
           payload: {
-            function: `${CONTRACT_ADDRESS}::lending_pool::get_pool_stats`,
+            function: `${CONTRACT_ADDRESS}::lending_pool::get_total_deposited`,
             functionArguments: [ADMIN_ADDRESS],
           },
-        });
+        }),
+        aptos.view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::lending_pool::get_total_borrowed`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        }),
+        aptos.view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::lending_pool::get_total_repaid`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        }),
+        aptos.view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::lending_pool::get_protocol_fees_collected`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        }),
+        aptos.view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::lending_pool::get_available_liquidity`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        }),
+        aptos.view<[string]>({
+          payload: {
+            function: `${CONTRACT_ADDRESS}::lending_pool::get_utilization_rate`,
+            functionArguments: [ADMIN_ADDRESS],
+          },
+        }),
+      ]);
 
-        const totalDepositedUsdc = unitsToUsdc(totalDeposited);
-        const totalBorrowedUsdc = unitsToUsdc(totalBorrowed);
-        const totalRepaidUsdc = unitsToUsdc(totalRepaid);
-        const protocolFeesUsdc = unitsToUsdc(protocolFees);
+      const poolStats = {
+        totalDeposited: unitsToUsdc(totalDepositedStr),
+        totalBorrowed: unitsToUsdc(totalBorrowedStr),
+        availableLiquidity: unitsToUsdc(availableLiquidityStr),
+        utilizationRate: parseInt(utilizationRateStr) / 100,
+        protocolFees: unitsToUsdc(protocolFeesStr),
+        currentAPY: 12.5,
+      };
 
-        const netBorrowed = Math.max(0, totalBorrowedUsdc - totalRepaidUsdc);
-        const availableLiquidity = totalDepositedUsdc - netBorrowed;
-        const utilizationRate = totalDepositedUsdc > 0 ? (netBorrowed / totalDepositedUsdc) * 100 : 0;
-
-        const poolStats = {
-          totalDeposited: totalDepositedUsdc,
-          totalBorrowed: netBorrowed,
-          availableLiquidity,
-          utilizationRate,
-          protocolFees: protocolFeesUsdc,
-          currentAPY: 12.5, // Could be dynamic based on utilization
-        };
-
-        console.log("Pool stats from view function:", poolStats);
-        return poolStats;
-      } catch (viewError) {
-        console.log("View function failed, trying resource lookup:", viewError);
-      }
-
-      // Method 2: Fallback to resource lookup using Aptos SDK
-      const resource = await aptos.getAccountResource({
-        accountAddress: ADMIN_ADDRESS,
-        resourceType: `${CONTRACT_ADDRESS}::lending_pool::LendingPool`,
-      }).catch(() => null);
-
-      if (resource?.data) {
-        const poolData = resource.data;
-        const totalDeposited = unitsToUsdc(poolData.total_deposited || "0");
-        const totalBorrowed = unitsToUsdc(poolData.total_borrowed || "0");
-        const totalRepaid = unitsToUsdc(poolData.total_repaid || "0");
-        const protocolFees = unitsToUsdc(poolData.protocol_fees_collected || "0");
-
-        const netBorrowed = Math.max(0, totalBorrowed - totalRepaid);
-        const availableLiquidity = totalDeposited - netBorrowed;
-        const utilizationRate = totalDeposited > 0 ? (netBorrowed / totalDeposited) * 100 : 0;
-
-        const poolStats = {
-          totalDeposited,
-          totalBorrowed: netBorrowed,
-          availableLiquidity,
-          utilizationRate,
-          protocolFees,
-          currentAPY: 12.5,
-        };
-
-        console.log("Pool stats from resource:", poolStats);
-        return poolStats;
-      }
-
-      throw new Error("Could not fetch pool statistics");
+      console.log("Pool stats:", poolStats);
+      return poolStats;
     } catch (error) {
       console.error("Error fetching pool stats:", error);
       throw new Error("Failed to fetch pool statistics");
     }
   };
 
-  // Get current APY from interest rate model
+  // Get current APY from credit manager fixed interest rate
   const getCurrentAPY = async (): Promise<number> => {
     try {
       const [currentRate] = await aptos.view<[string]>({
         payload: {
-          function: `${CONTRACT_ADDRESS}::interest_rate_model::get_current_borrow_rate`,
+          function: `${CONTRACT_ADDRESS}::credit_manager::get_fixed_interest_rate`,
           functionArguments: [ADMIN_ADDRESS],
         },
       });
@@ -541,12 +501,12 @@ export default function Portfolio() {
     }
   };
 
-  // Calculate earned interest for a lender
+  // Get earned interest for a lender (from get_lender_info view function)
   const calculateEarnedInterest = async (lenderAddress: string): Promise<number> => {
     try {
-      const [earnedInterest] = await aptos.view<[string]>({
+      const [, earnedInterest] = await aptos.view<[string, string, string]>({
         payload: {
-          function: `${CONTRACT_ADDRESS}::lending_pool::calculate_earned_interest`,
+          function: `${CONTRACT_ADDRESS}::lending_pool::get_lender_info`,
           functionArguments: [ADMIN_ADDRESS, lenderAddress],
         },
       });
