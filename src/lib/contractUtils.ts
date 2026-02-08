@@ -125,9 +125,11 @@ export const getCreditLineInfo = async (
 ): Promise<{
   creditLimit: number;
   currentDebt: number;
+  borrowed: number;
+  interestAccrued: number;
   availableCredit: number;
   isActive: boolean;
-  lastBorrowTimestamp: number;
+  repaymentDueDate: number;
   collateral: number;
   totalRepaid: number;
 } | null> => {
@@ -137,9 +139,11 @@ export const getCreditLineInfo = async (
       return {
         creditLimit: 0,
         currentDebt: 0,
+        borrowed: 0,
+        interestAccrued: 0,
         availableCredit: 0,
         isActive: false,
-        lastBorrowTimestamp: 0,
+        repaymentDueDate: 0,
         collateral: 0,
         totalRepaid: 0,
       };
@@ -163,9 +167,11 @@ export const getCreditLineInfo = async (
     return {
       creditLimit: creditLimitUsdc,
       currentDebt: currentDebtUsdc,
+      borrowed: borrowedUsdc,
+      interestAccrued: interestUsdc,
       availableCredit: Math.max(0, availableCredit),
       isActive,
-      lastBorrowTimestamp: parseInt(repaymentDueDate),
+      repaymentDueDate: parseInt(repaymentDueDate),
       collateral: unitsToUsdc(collateralDeposited),
       totalRepaid: unitsToUsdc(totalRepaid),
     };
@@ -174,9 +180,11 @@ export const getCreditLineInfo = async (
       return {
         creditLimit: 0,
         currentDebt: 0,
+        borrowed: 0,
+        interestAccrued: 0,
         availableCredit: 0,
         isActive: false,
-        lastBorrowTimestamp: 0,
+        repaymentDueDate: 0,
         collateral: 0,
         totalRepaid: 0,
       };
@@ -294,7 +302,7 @@ export const getComprehensiveCreditInfo = async (
   totalBorrowed: number;
   totalRepaid: number;
   collateralDeposited: number;
-  lastBorrowTimestamp: number;
+  repaymentDueDate: number;
   isActive: boolean;
 } | null> => {
   try {
@@ -307,7 +315,7 @@ export const getComprehensiveCreditInfo = async (
         totalBorrowed: creditInfo.currentDebt + creditInfo.totalRepaid,
         totalRepaid: creditInfo.totalRepaid,
         collateralDeposited: creditInfo.collateral,
-        lastBorrowTimestamp: creditInfo.lastBorrowTimestamp,
+        repaymentDueDate: creditInfo.repaymentDueDate,
         isActive: creditInfo.isActive,
       };
     }
@@ -505,7 +513,7 @@ export const getUserComprehensiveStatus = async (
     currentDebt: number;
     availableCredit: number;
     isActive: boolean;
-    lastBorrowTimestamp: number;
+    repaymentDueDate: number;
     collateral: number;
     totalRepaid: number;
   } | null;

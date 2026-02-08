@@ -22,7 +22,7 @@ type CreditLineInfo = {
   currentDebt: number;
   availableCredit: number;
   isActive: boolean;
-  lastBorrowTimestamp: number;
+  repaymentDueDate: number;
   collateralAmount?: number;
   collateral?: number;
 };
@@ -67,7 +67,7 @@ export default function StakeCollateral() {
           currentDebt: creditInfo.currentDebt,
           availableCredit: creditInfo.availableCredit,
           isActive: creditInfo.isActive,
-          lastBorrowTimestamp: creditInfo.lastBorrowTimestamp,
+          repaymentDueDate: creditInfo.repaymentDueDate,
           collateralAmount: creditInfo.collateral,
         };
       }

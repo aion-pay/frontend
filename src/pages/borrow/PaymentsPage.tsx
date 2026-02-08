@@ -47,7 +47,7 @@ type CreditLineInfo = {
   currentDebt: number;
   availableCredit: number;
   isActive: boolean;
-  lastBorrowTimestamp: number;
+  repaymentDueDate: number;
   collateral: number;
 };
 
