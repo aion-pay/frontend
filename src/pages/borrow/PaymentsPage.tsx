@@ -37,6 +37,7 @@ import {
   ADMIN_ADDRESS,
   fetchUsdcBalance,
   getCreditLineInfo as getCreditLineInfoFromLib,
+  getRecentTransactions,
   usdcToUnits,
   validateAptosAddress,
   validateUsdcAmount,
@@ -877,6 +878,10 @@ const RecentTransactions = ({
         return <ArrowUp className="w-4 h-4 text-cyan-400" />;
       case "stake":
         return <Wallet className="w-4 h-4 text-purple-400" />;
+      case "collateral_withdrawn":
+        return <ArrowDown className="w-4 h-4 text-orange-400" />;
+      case "credit_opened":
+        return <Shield className="w-4 h-4 text-black" />;
       default:
         return <DollarSign className="w-4 h-4 text-gray-400" />;
     }
@@ -900,11 +905,15 @@ const RecentTransactions = ({
       case "borrow":
         return "Credit Used";
       case "repay":
-        return "Payment Made";
+        return "Repayment";
       case "stake":
         return "Collateral Added";
       case "payment":
-        return "Credit Payment";
+        return "Direct Payment";
+      case "collateral_withdrawn":
+        return "Collateral Withdrawn";
+      case "credit_opened":
+        return "Credit Line Opened";
       default:
         return type.charAt(0).toUpperCase() + type.slice(1);
     }
@@ -912,7 +921,7 @@ const RecentTransactions = ({
 
   const openTransactionHash = (hash?: string) => {
     if (hash) {
-      window.open(`https://evm.flowscan.io/tx/${hash}`, "_blank");
+      window.open(`https://explorer.aptoslabs.com/txn/${hash}?network=mainnet`, "_blank");
     }
   };
 
@@ -950,9 +959,14 @@ const RecentTransactions = ({
       <div className="flex-1 overflow-hidden">
         {loading ? (
           <div className="text-center py-8">
-            <Loader className="w-8 h-8 text-purple-400 mx-auto mb-3 animate-spin" />
+            <Loader className="w-8 h-8 text-black mx-auto mb-3 animate-spin" />
+            <p className="text-gray-600 text-sm">Loading transactions...</p>
+          </div>
+        ) : transactions.length === 0 ? (
+          <div className="text-center py-8">
+            <CreditCard className="w-8 h-8 text-gray-400 mx-auto mb-3" />
             <p className="text-gray-600 text-sm">No activity yet</p>
-            <p className="text-gray-500 text-xs mt-1">Your credit card activity will appear here</p>
+            <p className="text-gray-500 text-xs mt-1">Your credit activity will appear here</p>
           </div>
         ) : (
           <div
@@ -965,7 +979,7 @@ const RecentTransactions = ({
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ duration: 0.3, delay: 0.4 + index * 0.1 }}
-                className="flex items-center justify-between p-3 bg-black/40 backdrop-blur-sm rounded-xl hover:bg-gray-200/80 transition-colors cursor-pointer"
+                className="flex items-center justify-between p-3 bg-gray-100/80 backdrop-blur-sm rounded-xl hover:bg-gray-200/80 transition-colors cursor-pointer"
                 onClick={() => openTransactionHash(tx.hash)}
                 title={tx.hash ? "Click to view on explorer" : undefined}
               >
@@ -1009,7 +1023,7 @@ export default function PaymentsPage() {
 
   // Real transactions from events/blockchain
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loadingTransactions] = useState(false);
+  const [loadingTransactions, setLoadingTransactions] = useState(false);
 
   // Get credit line information from contract - UPDATED TO MATCH NEW INTEGRATION GUIDE
   const getCreditLineInfo = useCallback(async (): Promise<CreditLineInfo | null> => {
@@ -1078,6 +1092,7 @@ export default function PaymentsPage() {
     if (!connected || !account?.address) return;
 
     setLoading(true);
+    setLoadingTransactions(true);
     try {
       // Get USDC balance first
       await getUsdcBalance();
@@ -1089,16 +1104,14 @@ export default function PaymentsPage() {
 
       setCreditLineInfo(creditInfo);
 
-      // Load recent transactions (mock for now, could be fetched from events)
-      setTransactions([
-        { type: "payment", amount: 25.5, date: "2 hours ago", status: "completed", hash: "0x1234...abc" },
-        { type: "payment", amount: 15.75, date: "1 day ago", status: "completed", hash: "0x5678...def" },
-        { type: "borrow", amount: 100, date: "3 days ago", status: "completed", hash: "0x9abc...123" },
-      ]);
+      // Load recent transactions from on-chain events
+      const recentTxs = await getRecentTransactions(account.address.toString(), 20);
+      setTransactions(recentTxs);
     } catch (error) {
       console.error("Error loading data:", error);
     } finally {
       setLoading(false);
+      setLoadingTransactions(false);
     }
   }, [connected, account?.address, getUsdcBalance, getCreditLineInfo]);
 

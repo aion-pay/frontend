@@ -1195,3 +1195,94 @@ export const hasCollateral = async (borrowerAddress: string): Promise<boolean> =
     return false;
   }
 };
+
+export type RecentTransaction = {
+  type: "borrow" | "payment" | "repay" | "stake" | "collateral_withdrawn" | "credit_opened";
+  amount: number;
+  date: string;
+  status: string;
+  hash?: string;
+};
+
+const EVENT_TYPE_MAP: Record<string, RecentTransaction["type"]> = {
+  [`${CONTRACT_ADDRESS}::credit_manager::BorrowedEvent`]: "borrow",
+  [`${CONTRACT_ADDRESS}::credit_manager::DirectPaymentEvent`]: "payment",
+  [`${CONTRACT_ADDRESS}::credit_manager::RepaidEvent`]: "repay",
+  [`${CONTRACT_ADDRESS}::credit_manager::CollateralAddedEvent`]: "stake",
+  [`${CONTRACT_ADDRESS}::credit_manager::CollateralWithdrawnEvent`]: "collateral_withdrawn",
+  [`${CONTRACT_ADDRESS}::credit_manager::CreditOpenedEvent`]: "credit_opened",
+};
+
+export const getRecentTransactions = async (
+  borrowerAddress: string,
+  limit: number = 20
+): Promise<RecentTransaction[]> => {
+  try {
+    // Fetch account transactions via Aptos REST API
+    const response = await fetch(
+      `https://api.mainnet.aptoslabs.com/v1/accounts/${borrowerAddress}/transactions?limit=50`
+    );
+
+    if (!response.ok) {
+      console.error("Failed to fetch account transactions:", response.status);
+      return [];
+    }
+
+    const txns = await response.json();
+    const results: RecentTransaction[] = [];
+
+    for (const txn of txns) {
+      if (!txn.events || txn.success === false) continue;
+
+      for (const event of txn.events) {
+        const txType = EVENT_TYPE_MAP[event.type];
+        if (!txType) continue;
+
+        // Verify this event is for the borrower
+        if (event.data?.borrower && event.data.borrower !== borrowerAddress) continue;
+
+        const timestamp = parseInt(txn.timestamp || "0", 10) / 1_000_000; // Aptos timestamps are in microseconds
+
+        let amount = 0;
+        if (txType === "repay") {
+          const principal = parseInt(event.data.principal_amount || "0", 10);
+          const interest = parseInt(event.data.interest_amount || "0", 10);
+          amount = unitsToUsdc(principal + interest);
+        } else if (txType === "credit_opened") {
+          amount = unitsToUsdc(event.data.collateral_amount || "0");
+        } else {
+          amount = unitsToUsdc(event.data.amount || "0");
+        }
+
+        results.push({
+          type: txType,
+          amount,
+          date: formatTimestamp(timestamp),
+          status: "completed",
+          hash: txn.version?.toString(),
+        });
+      }
+
+      if (results.length >= limit) break;
+    }
+
+    return results.slice(0, limit);
+  } catch (error) {
+    console.error("Error fetching recent transactions:", error);
+    return [];
+  }
+};
+
+const formatTimestamp = (timestampSecs: number): string => {
+  if (timestampSecs === 0) return "Unknown";
+  const now = Math.floor(Date.now() / 1000);
+  const diffSecs = now - timestampSecs;
+
+  if (diffSecs < 60) return "Just now";
+  if (diffSecs < 3600) return `${Math.floor(diffSecs / 60)} min ago`;
+  if (diffSecs < 86400) return `${Math.floor(diffSecs / 3600)} hours ago`;
+  if (diffSecs < 604800) return `${Math.floor(diffSecs / 86400)} days ago`;
+
+  const date = new Date(timestampSecs * 1000);
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
