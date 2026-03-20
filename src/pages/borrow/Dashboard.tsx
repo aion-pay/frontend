@@ -685,7 +685,7 @@ export default function BorrowerDashboard() {
         </motion.div>
 
         {/* Show different content based on whether user has an active credit line */}
-        {!creditData?.isActive && !creditLineExists ? (
+        {!creditData || (!creditData.isActive && !creditLineExists) ? (
           // No active credit line - show call to action
           <motion.div
             initial={{ opacity: 0, y: 20 }}
