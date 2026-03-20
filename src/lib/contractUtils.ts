@@ -1,13 +1,33 @@
 import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk";
 
-export const CONTRACT_ADDRESS =
-  import.meta.env.VITE_CONTRACT_ADDRESS || "0xceb67803c3af67e2031e319f021e693ead697dda75e59a7b85a7e75a1cda4d78";
-export const ADMIN_ADDRESS =
-  import.meta.env.VITE_ADMIN_ADDRESS || "0xceb67803c3af67e2031e319f021e693ead697dda75e59a7b85a7e75a1cda4d78";
-export const USDC_METADATA = "0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b";
+// ── Network configuration driven by VITE_NETWORK env variable ──
+const networkEnv = (import.meta.env.VITE_NETWORK || "mainnet").toLowerCase();
+export const NETWORK: Network = networkEnv === "testnet" ? Network.TESTNET : Network.MAINNET;
 
-const config = new AptosConfig({ network: Network.MAINNET });
+const NETWORK_SUFFIX = NETWORK === Network.TESTNET ? "TESTNET" : "MAINNET";
+const NETWORK_SLUG = NETWORK === Network.TESTNET ? "testnet" : "mainnet";
+
+export const FULLNODE_URL = `https://fullnode.${NETWORK_SLUG}.aptoslabs.com/v1`;
+export const API_URL = `https://api.${NETWORK_SLUG}.aptoslabs.com/v1`;
+export const EXPLORER_URL = `https://explorer.aptoslabs.com`;
+export const EXPLORER_NETWORK_PARAM = `network=${NETWORK_SLUG}`;
+
+export const CONTRACT_ADDRESS =
+  import.meta.env[`VITE_CONTRACT_ADDRESS_${NETWORK_SUFFIX}`] ||
+  "0xceb67803c3af67e2031e319f021e693ead697dda75e59a7b85a7e75a1cda4d78";
+export const ADMIN_ADDRESS =
+  import.meta.env[`VITE_ADMIN_ADDRESS_${NETWORK_SUFFIX}`] ||
+  "0xceb67803c3af67e2031e319f021e693ead697dda75e59a7b85a7e75a1cda4d78";
+export const USDC_METADATA =
+  import.meta.env[`VITE_USDC_METADATA_${NETWORK_SUFFIX}`] ||
+  "0xbae20765a1bddf55ece34ce6c59b03da8c8e969570db28dab09de80e2a5effb8";
+
+const config = new AptosConfig({ network: NETWORK });
 export const aptos = new Aptos(config);
+
+export const waitForTransaction = async (txHash: string): Promise<void> => {
+  await aptos.waitForTransaction({ transactionHash: txHash });
+};
 
 export const usdcToUnits = (usdcAmount: number): string => {
   const amount = Math.floor(usdcAmount * 1000000);
@@ -20,6 +40,24 @@ export const unitsToUsdc = (units: string | number): number => {
 };
 
 export const fetchUsdcBalance = async (accountAddress: string): Promise<number> => {
+  // Approach 1: Aptos SDK indexed query (most reliable)
+  try {
+    const balances = await aptos.getCurrentFungibleAssetBalances({
+      options: {
+        where: {
+          owner_address: { _eq: accountAddress },
+          asset_type: { _eq: USDC_METADATA },
+        },
+      },
+    });
+    if (balances.length > 0 && balances[0].amount != null) {
+      return Number(balances[0].amount) / 1_000_000;
+    }
+  } catch (error) {
+    console.error("[fetchUsdcBalance] Indexer query failed:", error);
+  }
+
+  // Approach 2: View function fallback
   try {
     const [balanceStr] = await aptos.view<[string]>({
       payload: {
@@ -29,35 +67,13 @@ export const fetchUsdcBalance = async (accountAddress: string): Promise<number> 
       },
     });
     const balance = parseInt(balanceStr, 10);
-    return balance / 1000000;
+    if (!isNaN(balance)) return balance / 1_000_000;
   } catch (error) {
-    try {
-      const allResources = await fetch(`https://fullnode.mainnet.aptoslabs.com/v1/accounts/${accountAddress}/resources`)
-        .then((res) => res.json())
-        .catch(() => []);
-      const usdcResource = allResources.find(
-        (resource: any) =>
-          resource.type.includes(USDC_METADATA) ||
-          (resource.type.includes("coin::CoinStore") && resource.type.toLowerCase().includes("usdc")) ||
-          resource.type.includes("0x1::coin::CoinStore<0x"),
-      );
-      if (usdcResource) {
-        const balance = parseInt(usdcResource.data.coin?.value || usdcResource.data.balance || "0");
-        return balance / 1000000;
-      }
-      const coinStoreResponse = await fetch(
-        `https://fullnode.mainnet.aptoslabs.com/v1/accounts/${accountAddress}/resource/0x1::coin::CoinStore<${USDC_METADATA}>`,
-      )
-        .then((res) => res.json())
-        .catch(() => null);
-      if (coinStoreResponse?.data?.coin?.value) {
-        return parseInt(coinStoreResponse.data.coin.value) / 1000000;
-      }
-    } catch (fallbackError) {
-      console.error("Error fetching USDC balance:", fallbackError);
-    }
-    return 0;
+    console.error("[fetchUsdcBalance] View function failed:", error);
   }
+
+  console.warn("[fetchUsdcBalance] All approaches returned 0 for", accountAddress);
+  return 0;
 };
 
 export const checkLenderExists = async (lenderAddress: string): Promise<boolean> => {
@@ -149,8 +165,8 @@ export const getCreditLineInfo = async (
       };
     }
 
-    // Contract returns: (initial_collateral, credit_limit, borrowed, interest, total_repaid, due_date, is_active)
-    const [collateralDeposited, creditLimit, borrowedAmount, totalInterest, totalRepaid, repaymentDueDate, isActive] =
+    // Contract returns: (credit_limit, credit_limit, borrowed_amount, total_interest, total_debt, due_date, is_active)
+    const [dynamicCreditLimit, , borrowedAmount, totalInterest, , repaymentDueDate, isActive] =
       await aptos.view<[string, string, string, string, string, string, boolean]>({
         payload: {
           function: `${CONTRACT_ADDRESS}::credit_manager::get_credit_info`,
@@ -158,11 +174,14 @@ export const getCreditLineInfo = async (
         },
       });
 
-    const creditLimitUsdc = unitsToUsdc(creditLimit);
+    const creditLimitUsdc = unitsToUsdc(dynamicCreditLimit);
     const borrowedUsdc = unitsToUsdc(borrowedAmount);
     const interestUsdc = unitsToUsdc(totalInterest);
     const currentDebtUsdc = borrowedUsdc + interestUsdc;
     const availableCredit = creditLimitUsdc - currentDebtUsdc;
+
+    // Fetch totalRepaid separately from repayment history
+    const repaymentHistory = await getRepaymentHistory(userAddress);
 
     return {
       creditLimit: creditLimitUsdc,
@@ -172,8 +191,8 @@ export const getCreditLineInfo = async (
       availableCredit: Math.max(0, availableCredit),
       isActive,
       repaymentDueDate: parseInt(repaymentDueDate),
-      collateral: unitsToUsdc(collateralDeposited),
-      totalRepaid: unitsToUsdc(totalRepaid),
+      collateral: creditLimitUsdc, // credit_limit = collateral + earned interest
+      totalRepaid: repaymentHistory?.totalRepaid ?? 0,
     };
   } catch (error: any) {
     if (error.message?.includes("Function not found") || error.message?.includes("FUNCTION_NOT_FOUND")) {
@@ -349,6 +368,12 @@ export const handleTransactionError = (error: any): string => {
   if (errorMessage.includes("EXCEEDS_CREDIT_LIMIT")) {
     return "This transaction exceeds your credit limit";
   }
+  if (errorMessage.includes("EAMOUNT_TOO_LOW") || errorMessage.includes("EMIN_DEPOSIT") || errorMessage.includes("EINSUFFICIENT_AMOUNT")) {
+    return "Amount too low. Minimum is 1 USDC.";
+  }
+  if (errorMessage.includes("rejected") || errorMessage.includes("cancelled") || errorMessage.includes("User rejected")) {
+    return "Transaction was cancelled.";
+  }
   return "Transaction failed. Please try again.";
 };
 
@@ -361,8 +386,10 @@ export const formatUsdc = (amount: number): string => {
   }).format(amount);
 };
 
-export const validateUsdcAmount = (amount: number): boolean => {
-  return amount > 0 && amount <= 1000000 && !isNaN(amount);
+export const MIN_USDC_AMOUNT = 1; // 1 USDC minimum for contract operations
+
+export const validateUsdcAmount = (amount: number, minAmount: number = MIN_USDC_AMOUNT): boolean => {
+  return !isNaN(amount) && amount >= minAmount && amount <= 1000000;
 };
 
 export const validateAptosAddress = (address: string): boolean => {
@@ -479,10 +506,11 @@ export const depositToLendingPool = async (_lenderAddress: string, amountUsdc: n
   return payload;
 };
 
-export const initializeUserReputation = async (_userAddress: string) => {
+// Note: initialize_user requires the credit_manager signer, so this is effectively admin-only
+export const initializeUserReputation = async (userAddress: string) => {
   const payload = {
     function: `${CONTRACT_ADDRESS}::reputation_manager::initialize_user`,
-    functionArguments: [ADMIN_ADDRESS],
+    functionArguments: [ADMIN_ADDRESS, userAddress],
     typeArguments: [],
   };
   return payload;
@@ -774,9 +802,9 @@ export const getReputationManagerInfo = async (): Promise<{
   };
   tierThresholds: {
     min: number;
-    bronze: number;
     silver: number;
     gold: number;
+    platinum: number;
     max: number;
   };
   isPaused: boolean;
@@ -827,11 +855,11 @@ export const getReputationManagerInfo = async (): Promise<{
             functionArguments: [],
           },
         })
-        .then(([min, bronze, silver, gold, max]) => ({
+        .then(([min, silver, gold, platinum, max]) => ({
           min: parseInt(min),
-          bronze: parseInt(bronze),
           silver: parseInt(silver),
           gold: parseInt(gold),
+          platinum: parseInt(platinum),
           max: parseInt(max),
         })),
       aptos
@@ -1052,7 +1080,7 @@ export const validatePaymentPreconditions = async (
   try {
     // 1. Check if amount is valid
     if (!validateUsdcAmount(amountUsdc)) {
-      return { isValid: false, error: "Invalid payment amount" };
+      return { isValid: false, error: "Invalid payment amount. Minimum is 1 USDC, maximum is 1,000,000 USDC." };
     }
 
     // 2. Check if recipient address is valid
@@ -1220,7 +1248,7 @@ export const getRecentTransactions = async (
   try {
     // Fetch account transactions via Aptos REST API
     const response = await fetch(
-      `https://api.mainnet.aptoslabs.com/v1/accounts/${borrowerAddress}/transactions?limit=50`
+      `${API_URL}/accounts/${borrowerAddress}/transactions?limit=50`
     );
 
     if (!response.ok) {
